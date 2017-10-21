@@ -1,2 +1,3 @@
-# gin-exporter
-gin (web framework) prometheus exporter
+# api-exporter
+
+API prometheus exporter
