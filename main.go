@@ -13,21 +13,25 @@ import (
 	"gopkg.in/urfave/cli.v2"
 )
 
+func exporterMiddleware(c *gin.Context) {
+	t := time.Now()
+	c.Next()
+	ip, method, path := c.ClientIP(), c.Request.Method, c.Request.URL.Path
+	latency := time.Since(t)
+	status := c.Writer.Status()
+	auditStr := fmt.Sprintf("IP: [%s] - Method: [%s] Path: [%s] - Status: [%d] Latency: [%v]",
+		ip, method, path, status, latency)
+	logrus.Info(auditStr)
+	exporter.Collect(ip, method, path, status, latency)
+}
 func run(c *cli.Context) error {
 	gin.SetMode(gin.ReleaseMode)
 	gin.DefaultWriter = ioutil.Discard
+	logrus.SetLevel(logrus.DebugLevel)
 
 	r := gin.Default()
 	r.Use(gin.Recovery())
-	r.Use(func(c *gin.Context) {
-		t := time.Now()
-		c.Next()
-		latency := time.Since(t)
-		status := c.Writer.Status()
-		auditStr := fmt.Sprintf("IP: [%s] - Method: [%s] Path: [%s] - Status: [%d] Latency: [%v]",
-			c.ClientIP(), c.Request.Method, c.Request.URL, status, latency)
-		logrus.Info(auditStr)
-	})
+	r.Use(exporterMiddleware)
 
 	r.GET("/200", func(c *gin.Context) {
 		c.String(200, "200")
@@ -47,9 +51,6 @@ func run(c *cli.Context) error {
 		c.JSON(200, rs)
 	})
 
-	if err := exporter.RegisterRoutes(rs); err != nil {
-		return err
-	}
 	r.GET("/metrics", func(c *gin.Context) {
 		prometheus.Handler().ServeHTTP(c.Writer, c.Request)
 	})
