@@ -2,8 +2,10 @@ package exporter
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 )
@@ -46,37 +48,6 @@ var uptime = prometheus.NewCounter(
 	},
 )
 
-type pathInfo struct {
-	requestNum   int
-	statusNum    map[string]int
-	latencyTotal time.Time
-}
-
-type Exporter struct {
-	paths    map[string]pathInfo
-	ipNum    map[string]string
-	startAt  time.Time
-	duration time.Duration
-}
-
-func New(routes []string, duration time.Duration) {
-	e := &Exporter{
-		startAt:  time.Now(),
-		duration: time.Second,
-		paths:    make(map[string]pathInfo, 0),
-		ipNum:    make(map[string]string, 0),
-	}
-
-	for _, route := range routes {
-		logrus.Debugf("get route: %s", route)
-		e.paths[route] = pathInfo{
-			requestNum: 0,
-			statusNum:  make(map[string]int, 0),
-		}
-	}
-
-}
-
 func init() {
 	const timerDuration = 1 * time.Minute
 	for _, collector := range allGaugeVec {
@@ -102,7 +73,15 @@ func init() {
 	}()
 }
 
-func Collect(ip, method, path string, status int, latency time.Duration) error {
+func collect(ip, UA, method, path string, status int, latency time.Duration) {
+
+	if strings.Contains(UA, "Prometheus") {
+		for _, collector := range allGaugeVec {
+			c := collector.(*prometheus.GaugeVec)
+			c.Reset()
+		}
+		return
+	}
 
 	for name, collector := range allGaugeVec {
 		c := collector.(*prometheus.GaugeVec)
@@ -118,5 +97,16 @@ func Collect(ip, method, path string, status int, latency time.Duration) error {
 		}
 	}
 
-	return nil
+	return
+}
+
+func GinMiddleware(c *gin.Context) {
+	t := time.Now()
+	c.Next()
+	go func(c *gin.Context) {
+		ip, UA, method, path := c.ClientIP(), c.Request.UserAgent(), c.Request.Method, c.Request.URL.Path
+		latency := time.Since(t)
+		status := c.Writer.Status()
+		collect(ip, UA, method, path, status, latency)
+	}(c.Copy())
 }

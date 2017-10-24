@@ -2,9 +2,8 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
-	"time"
+	"os/signal"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -13,25 +12,14 @@ import (
 	"gopkg.in/urfave/cli.v2"
 )
 
-func exporterMiddleware(c *gin.Context) {
-	t := time.Now()
-	c.Next()
-	ip, method, path := c.ClientIP(), c.Request.Method, c.Request.URL.Path
-	latency := time.Since(t)
-	status := c.Writer.Status()
-	auditStr := fmt.Sprintf("IP: [%s] - Method: [%s] Path: [%s] - Status: [%d] Latency: [%v]",
-		ip, method, path, status, latency)
-	logrus.Info(auditStr)
-	exporter.Collect(ip, method, path, status, latency)
-}
 func run(c *cli.Context) error {
 	gin.SetMode(gin.ReleaseMode)
-	gin.DefaultWriter = ioutil.Discard
+	// gin.DefaultWriter = ioutil.Discard
 	logrus.SetLevel(logrus.DebugLevel)
 
 	r := gin.Default()
 	r.Use(gin.Recovery())
-	r.Use(exporterMiddleware)
+	r.Use(exporter.GinMiddleware)
 
 	r.GET("/200", func(c *gin.Context) {
 		c.String(200, "200")
@@ -55,8 +43,17 @@ func run(c *cli.Context) error {
 		prometheus.Handler().ServeHTTP(c.Writer, c.Request)
 	})
 
-	p := fmt.Sprintf(":%s", c.String("port"))
-	return r.Run(p)
+	p := fmt.Sprintf("localhost:%s", c.String("port"))
+	go func() {
+		r.Run(p)
+	}()
+	logrus.Infof("Server starts at %s", p)
+
+	sigChan := make(chan os.Signal)
+	signal.Notify(sigChan, os.Interrupt)
+	logrus.Infof("Server stopped due to [%s]", <-sigChan)
+
+	return nil
 }
 
 func main() {
